@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Markdown Writer</title>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<style>
+body { font-family: Arial, sans-serif; margin:0; height:100vh; display:flex; }
+#editor { width:50%; height:100%; border-right:2px solid #ccc; box-sizing:border-box; display:flex; flex-direction:column; padding:10px;}
+/* KORREKTUR: Die ID des Textareas ist jetzt 'inputText' */
+#inputText { flex:1; width:100%; font-size:16px; padding:10px; resize:vertical; box-sizing:border-box; }
+#preview { width:50%; height:100%; padding:20px; overflow-y:auto; background-color:#f9f9f9;}
+h1 {font-size:2em;margin:0.5em 0;} h2 {font-size:1.7em;margin:0.5em 0;} h3 {font-size:1.4em;margin:0.5em 0;} h4 {font-size:1.2em;margin:0.5em 0;}
+strong{font-weight:bold;} em{font-style:italic;} u{text-decoration:underline;} del{text-decoration:line-through;}
+ul{margin:0.5em 0 0.5em 1.5em; padding:0;} ol{margin:0.5em 0 0.5em 1.5em; padding:0;} li{margin:0.2em 0;}
+button{margin-top:5px; padding:5px 10px; font-size:14px; cursor:pointer;}
+</style>
+</head>
+<body>
+
+<div id="editor">
+    <textarea id="inputText" placeholder="Eingabe…"></textarea>
+    <button onclick="copyToClipboard()">Text kopieren</button>
+</div>
+
+<div id="preview"></div>
+
+<script>
+// Hilfs-Array, um Inline-Mathe-Ausdrücke zu speichern
+const inlineMaths = [];
+
+// Markdown-Konvertierung
+function convertMarkdown(text){
+    // 1. Inline-Mathe extrahieren und durch Platzhalter ersetzen, um Konflikte zu vermeiden
+    let processedText = text.replace(/\$(.+?)\$/g, function(match, content) {
+        const token = '%%INLINEMATH'+inlineMaths.length+'%%';
+        // MathJax verwendet `\(...\)` für Inline-Mathe
+        inlineMaths.push('\\('+content.trim()+'\\)');
+        return token;
+    });
+
+    // 2. Normale Markdown-Formatierung anwenden
+    // HEADINGS
+    processedText = processedText.replace(/^#### (.+)$/gm,'<h4>$1</h4>');
+    processedText = processedText.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+    processedText = processedText.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+    processedText = processedText.replace(/^# (.+)$/gm,'<h1>$1</h1>');
+
+    // STYLES
+    processedText = processedText.replace(/__(.+?)__/g,'<u>$1</u>'); // Unterstrichen
+    processedText = processedText.replace(/\*(.+?)\*/g,'<strong>$1</strong>'); // Fett (Strong)
+    processedText = processedText.replace(/_(.+?)_/g,'<em>$1</em>'); // Kursiv (Em)
+    processedText = processedText.replace(/~(.+?)~/g,'<del>$1</del>'); // Durchgestrichen
+
+    // 3. Inline-Mathe-Platzhalter wieder einfügen
+    processedText = processedText.replace(/%%INLINEMATH(\d+)%%/g, function(match, index) {
+        // Sicherstellen, dass die Inhalte korrekt aus dem Array abgerufen werden
+        return inlineMaths[parseInt(index, 10)];
+    });
+
+    return processedText;
+}
+
+// Haupt-Rendering-Funktion
+function renderPreview(){
+    // KORRIGIERT: Holt den Wert über die korrekte ID
+    const inputElement = document.getElementById('inputText');
+    if (!inputElement) return; // Frühzeitiger Abbruch, falls das Element nicht existiert.
+    
+    let input = inputElement.value;
+
+    // Arrays für Platzhalter zurücksetzen
+    inlineMaths.length = 0;
+
+    // Block-Mathe extrahieren und Platzhalter setzen
+    const blockMaths = [];
+    input = input.replace(/\$\$([\s\S]*?)\$\$/g, function(match, content){
+        const token = '%%BLOCKMATH'+blockMaths.length+'%%';
+        blockMaths.push(content);
+        return token;
+    });
+
+    const lines = input.split('\n');
+    let html = '';
+    let inUL = false;
+    let inOL = false;
+    let inParagraph = false; 
+
+    const closeParagraph = () => {
+        if (inParagraph) {
+            html += '</p>';
+            inParagraph = false;
+        }
+    };
+    const openParagraph = () => {
+        if (!inParagraph) {
+            html += '<p>';
+            inParagraph = true;
+        }
+    };
+    const closeLists = () => {
+        if (inUL) { html += '</ul>'; inUL = false; }
+        if (inOL) { html += '</ol>'; inOL = false; }
+    };
+
+    // Verarbeiten der Zeilen
+    lines.forEach(line=>{
+        const trimmed = line.trim();
+
+        // 1. Überschrift-Erkennung
+        if(/^#+ /.test(line.trim())){
+            closeLists();
+            closeParagraph();
+            html += convertMarkdown(line);
+            return;
+        }
+
+        // 2. Block-Mathe-Erkennung
+        const blockMatch = trimmed.match(/%%BLOCKMATH(\d+)%%/);
+        if(blockMatch){
+            closeLists();
+            closeParagraph();
+            // MathJax-Block-Mathe-Format: \[...\]
+            html+='<div>\\['+blockMaths[parseInt(blockMatch[1], 10)]+ '\\]</div>';
+            return;
+        }
+
+        // 3. Listen-Erkennung (Ungeordnet)
+        if(/^[-*] /.test(trimmed)){
+            closeParagraph();
+            if(inOL){html+='</ol>'; inOL=false;}
+            if(!inUL){html+='<ul>'; inUL=true;}
+            html+='<li>'+convertMarkdown(trimmed.replace(/^[-*] /,''))+'</li>';
+            return;
+        }
+
+        // 4. Listen-Erkennung (Nummeriert)
+        const numMatch = trimmed.match(/^(\d+)\. (.+)/);
+        if(numMatch){
+            closeParagraph();
+            if(inUL){html+='</ul>'; inUL=false;}
+            const num = parseInt(numMatch[1], 10);
+            const content = numMatch[2];
+            // KORRIGIERT: Fügt start-Attribut nur beim ersten Element hinzu
+            if(!inOL){html+=`<ol start="${num}">`; inOL=true;} 
+            html+='<li>'+convertMarkdown(content)+'</li>';
+            return;
+        }
+
+        // 5. Leere Zeile: Schließt alles und beginnt neuen Absatz
+        if(trimmed === ''){
+            closeLists();
+            closeParagraph(); // Schließt den aktuellen Absatz
+            html += '<br>'; // Fügt eine zusätzliche Lücke hinzu
+            return;
+        }
+
+
+        // 6. Normale Textzeilen (Zeilenumbruch erzwungen durch <br>)
+        if (!inUL && !inOL) {
+            // Normale Textzeile - Konvertieren und <br> anhängen
+            openParagraph();
+            html += convertMarkdown(line) + '<br>';
+        }
+    });
+
+    // Schließen am Ende des Dokuments
+    closeLists();
+    closeParagraph();
+
+    // Aufräumen von leeren Tags (z.B. <p><br></p>)
+    html = html.replace(/<p><br><\/p>/g, '<br>').replace(/<p><\/p>/g, '');
+
+    document.getElementById('preview').innerHTML = html;
+    MathJax.typeset(); 
+}
+
+// KORRIGIERTE Copy-Button Funktion
+function copyToClipboard(){
+    const text = document.getElementById("inputText").value;
+    
+    navigator.clipboard.writeText(text).then(() => {
+        alert("Text des Editors in Zwischenablage kopiert!");
+    }).catch(err => {
+        console.error('Kopieren fehlgeschlagen: ', err);
+        alert("Kopieren fehlgeschlagen. Bitte versuchen Sie es manuell.");
+    });
+}
+
+// Initialisierung und Event-Listener
+document.addEventListener('DOMContentLoaded', () => {
+    const inputElement = document.getElementById('inputText');
+    
+    // Sicherstellen, dass das Element existiert, bevor der Listener hinzugefügt wird
+    if (inputElement) {
+        inputElement.addEventListener('input', renderPreview);
+    }
+    
+    // Initiales Rendern beim Laden der Seite
+    renderPreview();
+});
+</script>
+
+
+</body>
+</html>
